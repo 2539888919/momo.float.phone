@@ -26,21 +26,43 @@ export function resolveVoiceConfig(characterId: string, appId?: ContentAppId): V
  * - Minimax: REST API → hex-encoded mp3
  * - OpenAI: REST API → binary audio blob
  */
+/**
+ * 语音合成前文本净化：
+ * 1. 过滤尖括号标签及思考块，如 <think>...</think>, <action>...</action>, <smile>, <whisper> 等
+ * 2. 过滤星号动作/旁白描写，如 *轻轻一笑*
+ * 3. 过滤系统方括号指令，如 [内心:xxx], [动作:xxx], [表情:xxx]
+ */
+export function sanitizeTextForTTS(rawText: string): string {
+    if (!rawText) return "";
+    return rawText
+        .replace(/<([a-zA-Z0-9_-]+)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
+        .replace(/<[^>]+>/g, "")
+        .replace(/\*[^*]+\*/g, "")
+        .replace(/\[(?:内心|动作|表情|状态|好感度|转账|红包|图片|语音|位置|音乐|系统)[^\]]*\]/gi, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+}
+
 export async function synthesizeSpeech(
     text: string,
     voiceConfig: VoiceApiConfig,
     options?: { emotion?: string },
 ): Promise<Blob | null> {
-    if (!text.trim()) return null;
+    const cleanText = sanitizeTextForTTS(text);
+    if (!cleanText) return null;
 
     const provider = voiceConfig.provider;
 
     if (provider === "Minimax") {
-        return synthesizeMinimax(text, voiceConfig, options?.emotion);
+        return synthesizeMinimax(cleanText, voiceConfig, options?.emotion);
     }
 
     if (provider === "OpenAI") {
-        return synthesizeOpenAI(text, voiceConfig);
+        return synthesizeOpenAI(cleanText, voiceConfig);
+    }
+
+    if (provider === "ElevenLabs") {
+        return synthesizeElevenLabs(cleanText, voiceConfig);
     }
 
     return null;
@@ -171,6 +193,46 @@ async function synthesizeOpenAI(text: string, config: VoiceApiConfig): Promise<B
     if (!response.ok) {
         const errText = await response.text().catch(() => "");
         throw new Error(`OpenAI TTS 请求失败 (${response.status}): ${errText}`);
+    }
+
+    const blob = await response.blob();
+    return new Blob([await blob.arrayBuffer()], { type: "audio/mpeg" });
+}
+
+// ── ElevenLabs TTS ──────────────────────────────────
+
+async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promise<Blob | null> {
+    if (!config.apiKey) throw new Error("ElevenLabs API Key 未配置");
+
+    const baseUrl = (config.baseUrl || "https://api.elevenlabs.io/v1").replace(/\/$/, "");
+    const voiceId = config.defaultVoice || "21m00Tcm4TlvDq8ikWAM";
+    const modelId = config.model || "eleven_turbo_v2_5";
+
+    // 过滤可能夹带的非 ASCII 字符，避免请求头报错
+    const safeApiKey = config.apiKey.trim().replace(/[^\x00-\x7F]/g, "");
+
+    const response = await fetchWithTimeout(`${baseUrl}/text-to-speech/${voiceId}`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "xi-api-key": safeApiKey,
+        },
+        body: JSON.stringify({
+            text,
+            model_id: modelId,
+            voice_settings: {
+                stability: 0.5,
+                similarity_boost: 0.75,
+                speed: typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed)
+                    ? Math.min(2.0, Math.max(0.5, config.speechSpeed))
+                    : 1.0,
+            },
+        }),
+    });
+
+    if (!response.ok) {
+        const errText = await response.text().catch(() => "");
+        throw new Error(`ElevenLabs TTS 请求失败 (${response.status}): ${errText}`);
     }
 
     const blob = await response.blob();
