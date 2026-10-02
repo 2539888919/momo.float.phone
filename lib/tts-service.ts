@@ -206,7 +206,7 @@ async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promi
 
     const baseUrl = (config.baseUrl || "https://api.elevenlabs.io/v1").replace(/\/$/, "");
     const voiceId = config.defaultVoice || "21m00Tcm4TlvDq8ikWAM";
-    const modelId = config.model || "eleven_v4";
+    const modelId = config.model || "eleven_turbo_v2_5";
 
     // 过滤可能夹带的非 ASCII 字符，避免请求头报错
     const safeApiKey = config.apiKey.trim().replace(/[^\x00-\x7F]/g, "");
@@ -230,9 +230,17 @@ async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promi
         }),
     });
 
+    const reqId = response.headers.get("request-id") || response.headers.get("x-trace-id") || "";
+
     if (!response.ok) {
         const errText = await response.text().catch(() => "");
-        throw new Error(`ElevenLabs TTS 请求失败 (${response.status}): ${errText}`);
+        throw new Error(`ElevenLabs TTS 请求失败 (${response.status})${reqId ? ` [req_id: ${reqId}]` : ""}: ${errText}`);
+    }
+
+    // 读取官方响应头：获取本次生成的字符消耗与排查追踪 ID
+    const charCost = response.headers.get("character-cost");
+    if (charCost) {
+        console.log(`[ElevenLabs TTS] 合成成功 (model: ${modelId})，本次消耗字符额度: ${charCost}，request-id: ${reqId}`);
     }
 
     const blob = await response.blob();
