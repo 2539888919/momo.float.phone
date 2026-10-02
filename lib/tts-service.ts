@@ -42,7 +42,7 @@ export type TTSEmotionContext = {
 
 /**
  * 智能音频控制指令与情绪提取引擎：
- * 1. 深度解析尖括号英文情绪：<whisper>, <happy>, <sad>, <angry>, <excited>, <sigh>, <giggle>, <speed="1.2"> 等
+ * 1. 深度解析尖括号英文情绪与指令：<whisper>, <happy>, <sad>, <angry>, <excited>, <sigh>, <giggle>, <speed="1.2"> 等
  * 2. 深度解析井号语速与控制指令：#speed:1.2, #speed=1.2, #1.2x, #fast, #slow, #whisper, #happy 等
  * 3. 提取完成后，地毯式抹去尖括号、井号指令、圆括号动作、黑括号，杜绝 TTS 念出任何标签字符！
  */
@@ -319,23 +319,36 @@ async function synthesizeElevenLabs(text: string, config: VoiceApiConfig, ctx?: 
 
     const baseUrl = (config.baseUrl || "https://api.elevenlabs.io/v1").replace(/\/$/, "");
     const voiceId = config.defaultVoice || "21m00Tcm4TlvDq8ikWAM";
-    const modelId = config.model || "eleven_v4";
+    let modelId = config.model || "eleven_v4";
 
-    // 过滤可能夹带的非 ASCII 字符，避免请求头报错
+    // 容错：eleven_v4_turbo 是 WebSocket 专属端点，在标准 HTTP 下自动平滑回退至 eleven_v4，防止 400 报错
+    if (modelId === "eleven_v4_turbo") {
+        modelId = "eleven_v4";
+    }
+
     const safeApiKey = config.apiKey.trim().replace(/[^\x00-\x7F]/g, "");
 
-    const baseSpeed = typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed)
-        ? config.speechSpeed
-        : 1.0;
-    const finalSpeed = Math.min(2.0, Math.max(0.5, baseSpeed * (ctx?.speedMultiplier ?? 1.0)));
+    const isV4 = modelId === "eleven_v4" || modelId.startsWith("eleven_v4");
+    let voiceSettings: Record<string, unknown> | undefined;
 
-    const voiceSettings: Record<string, unknown> = {
-        stability: ctx?.stability ?? 0.5,
-        similarity_boost: 0.75,
-        speed: finalSpeed,
-    };
-    if (typeof ctx?.style === "number") {
-        voiceSettings.style = ctx.style;
+    if (isV4) {
+        // 官方最新规范：v4 系列只支持 stability 和 similarity_boost，不再支持 style 和 speed（传了会报 400）
+        voiceSettings = {
+            stability: ctx?.stability ?? 0.5,
+            similarity_boost: 0.75,
+        };
+    } else {
+        // v3 / multilingual_v2 / flash 系列支持 speed 和 style
+        const baseSpeed = typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed)
+            ? config.speechSpeed
+            : 1.0;
+        const finalSpeed = Math.min(2.0, Math.max(0.5, baseSpeed * (ctx?.speedMultiplier ?? 1.0)));
+        voiceSettings = {
+            stability: ctx?.stability ?? 0.5,
+            similarity_boost: 0.75,
+            speed: finalSpeed,
+            ...(typeof ctx?.style === "number" ? { style: ctx.style } : {}),
+        };
     }
 
     const response = await fetchWithTimeout(`${baseUrl}/text-to-speech/${voiceId}`, {
