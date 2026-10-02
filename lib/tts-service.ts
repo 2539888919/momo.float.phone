@@ -32,28 +32,81 @@ export function resolveVoiceConfig(characterId: string, appId?: ContentAppId): V
  * 2. 过滤星号动作/旁白描写，如 *轻轻一笑*
  * 3. 过滤系统方括号指令，如 [内心:xxx], [动作:xxx], [表情:xxx]
  */
-const V4_AUDIO_TAGS = new Set([
-    "[whispers]", "[laughs]", "[sighs]", "[crying]", "[furious]", "[excited]", "[curious]", "[shouts]", "[pause]"
+export type TTSEmotionContext = {
+    cleanText: string;
+    v4TaggedText: string;
+    emotion?: "happy" | "sad" | "angry" | "fearful" | "disgusted" | "surprised" | "calm" | "neutral";
+    speedMultiplier: number;
+    stability?: number;
+};
+
+// ElevenLabs 官方 V4 原生支持的音频情感与动效标签白名单
+const ELEVEN_V4_VALID_TAGS = new Set([
+    "[curious]", "[crying]", "[mischievously]", "[furious]", "[excited]", "[sarcastic]",
+    "[whispers]", "[shouts]", "[laughs]", "[clears throat]", "[sighs]",
+    "[pause]", "[long pause]", "[applause]", "[phone buzzing]", "[light rain]"
 ]);
 
-export function prepareTextForElevenLabsV4(rawText: string): string {
-    if (!rawText) return "";
-    // 将尖括号英文情绪/动作翻译为官方 V4 允许的标签
-    let text = rawText
+export function extractTTSEmotionAndCleanText(rawText: string): TTSEmotionContext {
+    if (!rawText) return { cleanText: "", v4TaggedText: "", speedMultiplier: 1.0 };
+
+    let emotion: TTSEmotionContext["emotion"] = undefined;
+    let speedMultiplier = 1.0;
+    let stability: number | undefined = undefined;
+
+    const lower = rawText.toLowerCase();
+
+    // ── 1. 语速指令提取 ──
+    const speedNumMatch = lower.match(/#(?:speed|rate)[:=]?([0-9.]+)|#([0-9.]+)x|<speed[:=]["']?([0-9.]+)["']?>/);
+    if (speedNumMatch) {
+        const val = parseFloat(speedNumMatch[1] || speedNumMatch[2] || speedNumMatch[3]);
+        if (Number.isFinite(val) && val >= 0.5 && val <= 2.5) {
+            speedMultiplier = val;
+        }
+    }
+    if (/#(?:fast|quick|急促|快点)/.test(lower)) {
+        speedMultiplier = Math.max(speedMultiplier, 1.2);
+    } else if (/#(?:slow|hesitant|缓慢|慢点)/.test(lower)) {
+        speedMultiplier = Math.min(speedMultiplier, 0.82);
+    }
+
+    // ── 2. 情绪分析 ──
+    if (/<(?:whisper|whispering|soft|gentle|mumble|sigh|murmur)\b[^>]*>|#(?:whisper|soft)|（(?:轻声|耳语|温柔|呢喃|低语)）/.test(lower)) {
+        emotion = "calm";
+        stability = 0.65;
+    } else if (/<(?:happy|joy|laugh|laughing|giggle|smile|cheerful|excited)\b[^>]*>|#(?:happy|joy|excited)|（(?:开心|大笑|微笑|兴奋|欣喜)）/.test(lower)) {
+        emotion = "happy";
+        stability = 0.35;
+    } else if (/<(?:sad|cry|crying|sob|sobbing|weep|sorrow|tear|depressed)\b[^>]*>|#(?:sad|cry)|（(?:悲伤|哭泣|哽咽|难过|委屈|落泪)）/.test(lower)) {
+        emotion = "sad";
+        stability = 0.4;
+    } else if (/<(?:angry|anger|rage|shout|yell|furious|growl)\b[^>]*>|#(?:angry|rage)|（(?:愤怒|生气|怒吼|咆哮|咬牙)）/.test(lower)) {
+        emotion = "angry";
+        stability = 0.28;
+    }
+
+    // ── 3. 将输入中的尖括号、中文动作精准转化为 ElevenLabs V4 官方音频标签 ──
+    let v4Text = rawText
         .replace(/<(?:whisper|whispering|soft)\b[^>]*>[\s\S]*?<\/(?:whisper|whispering|soft)>/gi, (m) => `[whispers] ${m.replace(/<[^>]+>/g, "")}`)
         .replace(/<(?:whisper|whispering|soft)\b[^>]*>|#whisper|（(?:轻声|耳语|低语)）/gi, "[whispers] ")
         .replace(/<(?:laugh|laughing|giggle)\b[^>]*>|#laugh|（(?:大笑|轻笑|偷笑)）/gi, "[laughs] ")
         .replace(/<(?:sigh)\b[^>]*>|#sigh|（(?:叹气|叹息)）/gi, "[sighs] ")
-        .replace(/<(?:cry|crying|sob)\b[^>]*>|#cry|（(?:哭泣|哽咽)）/gi, "[crying] ");
+        .replace(/<(?:cry|crying|sob)\b[^>]*>|#cry|（(?:哭泣|哽咽)）/gi, "[crying] ")
+        .replace(/<(?:angry|furious|shout)\b[^>]*>|#angry|（(?:愤怒|怒吼|生气)）/gi, "[furious] ")
+        .replace(/<(?:excited)\b[^>]*>|#excited|（(?:兴奋|激动)）/gi, "[excited] ");
 
-    // 剔除思考块、非白名单标签与多余符号
-    text = text
-        .replace(/<(?:think|thought|context)\b[^>]*>[\s\S]*?<\/(?:think|thought|context)>/gi, "")
+    // ── 4. 彻底清洗非官方音频标签与所有杂质 ──
+    v4Text = v4Text
+        .replace(/<(?:think|thought|context|action|scene|state)\b[^>]*>[\s\S]*?<\/(?:think|thought|context|action|scene|state)>/gi, "")
         .replace(/<\/?[a-zA-Z0-9_-]+(?:\s+[^>]*)*>/g, "")
-        .replace(/#[a-zA-Z0-9_:=.]+\b/g, "")
+        .replace(/#(?:speed|rate)[:=]?[0-9.]+[a-z]?\b/gi, "")
+        .replace(/#[0-9.]+[a-z]?\b/gi, "")
+        .replace(/#(?:happy|sad|angry|whisper|excited|fast|slow|calm|soft|giggle|cry)\b/gi, "")
         .replace(/[（(][^）)]*[）)]/g, "")
-        // 保留官方合法 V4 标签 ([whispers], [laughs] 等)，其余方括号/黑括号清洗
-        .replace(/\[([^\]]+)\]/g, (match) => V4_AUDIO_TAGS.has(match.toLowerCase()) ? match : "")
+        .replace(/\[([^\]]+)\]/g, (match) => {
+            const lowerTag = match.toLowerCase();
+            return ELEVEN_V4_VALID_TAGS.has(lowerTag) ? match : "";
+        })
         .replace(/[【〔〖][^】〕〗]*[】〕〗]/g, "")
         .replace(/\*{1,3}[^*]+\*{1,3}/g, "")
         .replace(/\*/g, "")
@@ -62,12 +115,19 @@ export function prepareTextForElevenLabsV4(rawText: string): string {
         .replace(/\n{3,}/g, "\n\n")
         .trim();
 
-    return text;
+    const clean = v4Text.replace(/\[[^\]]+\]/g, "").trim();
+
+    return {
+        cleanText: clean,
+        v4TaggedText: v4Text || clean,
+        emotion,
+        speedMultiplier,
+        stability,
+    };
 }
 
 export function sanitizeTextForTTS(rawText: string): string {
-    if (!rawText) return "";
-    return prepareTextForElevenLabsV4(rawText).replace(/\[[^\]]+\]/g, "").trim();
+    return extractTTSEmotionAndCleanText(rawText).cleanText;
 }
 
 export async function synthesizeSpeech(
@@ -75,23 +135,21 @@ export async function synthesizeSpeech(
     voiceConfig: VoiceApiConfig,
     options?: { emotion?: string },
 ): Promise<Blob | null> {
+    const ctx = extractTTSEmotionAndCleanText(text);
+    if (!ctx.cleanText && !ctx.v4TaggedText) return null;
+
     const provider = voiceConfig.provider;
 
-    if (provider === "ElevenLabs") {
-        const v4Text = prepareTextForElevenLabsV4(text);
-        if (!v4Text) return null;
-        return synthesizeElevenLabs(v4Text, voiceConfig);
-    }
-
-    const cleanText = sanitizeTextForTTS(text);
-    if (!cleanText) return null;
-
     if (provider === "Minimax") {
-        return synthesizeMinimax(cleanText, voiceConfig, options?.emotion);
+        return synthesizeMinimax(ctx.cleanText, voiceConfig, ctx.emotion || options?.emotion, ctx.speedMultiplier);
     }
 
     if (provider === "OpenAI") {
-        return synthesizeOpenAI(cleanText, voiceConfig);
+        return synthesizeOpenAI(ctx.cleanText, voiceConfig, ctx.speedMultiplier);
+    }
+
+    if (provider === "ElevenLabs") {
+        return synthesizeElevenLabs(ctx.cleanText, voiceConfig, ctx);
     }
 
     return null;
@@ -230,36 +288,62 @@ async function synthesizeOpenAI(text: string, config: VoiceApiConfig): Promise<B
 
 // ── ElevenLabs TTS ──────────────────────────────────
 
-async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promise<Blob | null> {
+async function synthesizeElevenLabs(text: string, config: VoiceApiConfig, ctx?: TTSEmotionContext): Promise<Blob | null> {
     if (!config.apiKey) throw new Error("ElevenLabs API Key 未配置");
 
     const baseUrl = (config.baseUrl || "https://api.elevenlabs.io/v1").replace(/\/$/, "");
     const voiceId = config.defaultVoice || "21m00Tcm4TlvDq8ikWAM";
+    let modelId = config.model || "eleven_v4";
+
+    if (modelId === "eleven_v4_turbo") {
+        modelId = "eleven_v4";
+    }
+
     const safeApiKey = config.apiKey.trim().replace(/[^\x00-\x7F]/g, "");
+    const isV4 = modelId === "eleven_v4" || modelId.startsWith("eleven_v4");
 
-    // 1. 端点强制改为官方 V4 text-to-dialogue 端点
-    const url = `${baseUrl}/text-to-dialogue?output_format=mp3_44100_128`;
+    let url: string;
+    let requestBody: Record<string, unknown>;
 
-    // 2. 请求体严格遵循官方 V4 规范：inputs 数组 + 移除 style 与 speed
-    const requestBody = {
-        model_id: "eleven_v4",
-        inputs: [
-            {
-                text: text, // 内部保留 [whispers]、[laughs] 等合法音频标记
-                voice_id: voiceId,
-                new_turn: false,
-            },
-        ],
-        voices: [
-            {
-                voice_id: voiceId,
-                voice_settings: {
-                    stability: 0.5,
-                    similarity_boost: 0.75,
+    if (isV4) {
+        url = `${baseUrl}/text-to-dialogue?output_format=mp3_44100_128`;
+        requestBody = {
+            model_id: "eleven_v4",
+            inputs: [
+                {
+                    text: ctx?.v4TaggedText || text,
+                    voice_id: voiceId,
+                    new_turn: false,
                 },
+            ],
+            voices: [
+                {
+                    voice_id: voiceId,
+                    voice_settings: {
+                        stability: ctx?.stability ?? 0.5,
+                        similarity_boost: 0.75,
+                        use_speaker_boost: true,
+                    },
+                },
+            ],
+        };
+    } else {
+        url = `${baseUrl}/text-to-speech/${voiceId}`;
+        const baseSpeed = typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed)
+            ? config.speechSpeed
+            : 1.0;
+        const finalSpeed = Math.min(2.0, Math.max(0.5, baseSpeed * (ctx?.speedMultiplier ?? 1.0)));
+
+        requestBody = {
+            text: ctx?.cleanText || text,
+            model_id: modelId,
+            voice_settings: {
+                stability: ctx?.stability ?? 0.5,
+                similarity_boost: 0.75,
+                speed: finalSpeed,
             },
-        ],
-    };
+        };
+    }
 
     const response = await fetchWithTimeout(url, {
         method: "POST",
@@ -278,10 +362,9 @@ async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promi
 
     const charCost = response.headers.get("character-cost");
     if (charCost) {
-        console.log(`[ElevenLabs V4] 生成成功，消耗字符: ${charCost}`);
+        console.log(`[ElevenLabs TTS] 生成成功 (model: ${modelId})，消耗字符: ${charCost}，情绪: ${ctx?.emotion || "自然"}`);
     }
 
-    // 兼容返回 JSON(带 base64 audio) 或 直接二进制音频流
     const contentType = response.headers.get("content-type") || "";
     if (contentType.includes("application/json")) {
         const json = await response.json().catch(() => ({}));
