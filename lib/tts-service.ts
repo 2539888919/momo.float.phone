@@ -26,21 +26,43 @@ export function resolveVoiceConfig(characterId: string, appId?: ContentAppId): V
  * - Minimax: REST API → hex-encoded mp3
  * - OpenAI: REST API → binary audio blob
  */
+/**
+ * 语音合成前文本净化：
+ * 1. 过滤尖括号标签及思考块，如 <think>...</think>, <action>...</action>, <smile>, <whisper> 等
+ * 2. 过滤星号动作/旁白描写，如 *轻轻一笑*
+ * 3. 过滤系统方括号指令，如 [内心:xxx], [动作:xxx], [表情:xxx]
+ */
+export function sanitizeTextForTTS(rawText: string): string {
+    if (!rawText) return "";
+    return rawText
+        .replace(/<([a-zA-Z0-9_-]+)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
+        .replace(/<[^>]+>/g, "")
+        .replace(/\*[^*]+\*/g, "")
+        .replace(/\[(?:内心|动作|表情|状态|好感度|转账|红包|图片|语音|位置|音乐|系统)[^\]]*\]/gi, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+}
+
 export async function synthesizeSpeech(
     text: string,
     voiceConfig: VoiceApiConfig,
     options?: { emotion?: string },
 ): Promise<Blob | null> {
-    if (!text.trim()) return null;
+    const cleanText = sanitizeTextForTTS(text);
+    if (!cleanText) return null;
 
     const provider = voiceConfig.provider;
 
     if (provider === "Minimax") {
-        return synthesizeMinimax(text, voiceConfig, options?.emotion);
+        return synthesizeMinimax(cleanText, voiceConfig, options?.emotion);
     }
 
     if (provider === "OpenAI") {
-        return synthesizeOpenAI(text, voiceConfig);
+        return synthesizeOpenAI(cleanText, voiceConfig);
+    }
+
+    if (provider === "ElevenLabs") {
+        return synthesizeElevenLabs(cleanText, voiceConfig);
     }
 
     return null;
@@ -76,10 +98,17 @@ const MINIMAX_EMOTIONS = new Set([
 
 const MINIMAX_SPEED_MIN = 0.5;
 const MINIMAX_SPEED_MAX = 2.0;
+const MINIMAX_PITCH_MIN = -12;
+const MINIMAX_PITCH_MAX = 12;
 
 function normalizeMinimaxSpeed(speed: number | undefined): number {
     if (typeof speed !== "number" || !Number.isFinite(speed)) return 1.0;
     return Math.min(MINIMAX_SPEED_MAX, Math.max(MINIMAX_SPEED_MIN, speed));
+}
+
+function normalizeMinimaxPitch(pitch: number | undefined): number {
+    if (typeof pitch !== "number" || !Number.isFinite(pitch)) return 0;
+    return Math.min(MINIMAX_PITCH_MAX, Math.max(MINIMAX_PITCH_MIN, Math.round(pitch)));
 }
 
 async function synthesizeMinimax(text: string, config: VoiceApiConfig, emotion?: string): Promise<Blob | null> {
@@ -90,7 +119,7 @@ async function synthesizeMinimax(text: string, config: VoiceApiConfig, emotion?:
         voice_id: config.defaultVoice || "male-qn-qingse",
         speed: normalizeMinimaxSpeed(config.speechSpeed),
         vol: 1.0,
-        pitch: 0,
+        pitch: normalizeMinimaxPitch(config.speechPitch),
     };
     const normalizedEmotion = emotion?.trim().toLowerCase();
     if (normalizedEmotion && MINIMAX_EMOTIONS.has(normalizedEmotion)) {
@@ -155,12 +184,55 @@ async function synthesizeOpenAI(text: string, config: VoiceApiConfig): Promise<B
             input: text,
             voice: config.defaultVoice || "alloy",
             response_format: "mp3",
+            ...(typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed)
+                ? { speed: Math.min(2, Math.max(0.5, config.speechSpeed)) }
+                : {}),
         }),
     });
 
     if (!response.ok) {
         const errText = await response.text().catch(() => "");
         throw new Error(`OpenAI TTS 请求失败 (${response.status}): ${errText}`);
+    }
+
+    const blob = await response.blob();
+    return new Blob([await blob.arrayBuffer()], { type: "audio/mpeg" });
+}
+
+// ── ElevenLabs TTS ──────────────────────────────────
+
+async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promise<Blob | null> {
+    if (!config.apiKey) throw new Error("ElevenLabs API Key 未配置");
+
+    const baseUrl = (config.baseUrl || "https://api.elevenlabs.io/v1").replace(/\/$/, "");
+    const voiceId = config.defaultVoice || "21m00Tcm4TlvDq8ikWAM";
+    const modelId = config.model || "eleven_v4";
+
+    // 过滤可能夹带的非 ASCII 字符，避免请求头报错
+    const safeApiKey = config.apiKey.trim().replace(/[^\x00-\x7F]/g, "");
+
+    const response = await fetchWithTimeout(`${baseUrl}/text-to-speech/${voiceId}`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "xi-api-key": safeApiKey,
+        },
+        body: JSON.stringify({
+            text,
+            model_id: modelId,
+            voice_settings: {
+                stability: 0.5,
+                similarity_boost: 0.75,
+                speed: typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed)
+                    ? Math.min(2.0, Math.max(0.5, config.speechSpeed))
+                    : 1.0,
+            },
+        }),
+    });
+
+    if (!response.ok) {
+        const errText = await response.text().catch(() => "");
+        throw new Error(`ElevenLabs TTS 请求失败 (${response.status}): ${errText}`);
     }
 
     const blob = await response.blob();
@@ -243,18 +315,22 @@ function getSharedAudio(): HTMLAudioElement {
 }
 
 function silentWavUrl(): string {
-    // A few ms of 8-bit mono PCM silence — a valid source so play() actually
+    // A few ms of 16-bit mono PCM silence — a valid source so play() actually
     // starts (and thus unlocks the element) on iOS.
-    const numSamples = 16;
-    const buffer = new ArrayBuffer(44 + numSamples);
+    // 采样率用 48kHz 而不是 8kHz：iOS 的系统音频会话采样率会跟着刚播放的媒体走，
+    // 解锁音若是 8kHz，紧接着播的 TTS 会被压到 4kHz 以下而发闷（与保活音同理）。
+    const sampleRate = 48000;
+    const numSamples = 96; // 2ms
+    const dataSize = numSamples * 2;
+    const buffer = new ArrayBuffer(44 + dataSize);
     const view = new DataView(buffer);
     const writeStr = (off: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
-    writeStr(0, "RIFF"); view.setUint32(4, 36 + numSamples, true); writeStr(8, "WAVE");
+    writeStr(0, "RIFF"); view.setUint32(4, 36 + dataSize, true); writeStr(8, "WAVE");
     writeStr(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true); view.setUint32(24, 8000, true); view.setUint32(28, 8000, true);
-    view.setUint16(32, 1, true); view.setUint16(34, 8, true);
-    writeStr(36, "data"); view.setUint32(40, numSamples, true);
-    for (let i = 0; i < numSamples; i++) view.setUint8(44 + i, 128); // 8-bit silence = 128
+    view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+    writeStr(36, "data"); view.setUint32(40, dataSize, true);
+    // 16-bit PCM 静音为 0，ArrayBuffer 默认全 0，无需再写
     return URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
 }
 
