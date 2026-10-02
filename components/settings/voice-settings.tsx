@@ -739,7 +739,7 @@ export function VoiceSettings() {
                                                     <label className="menu-desc ml-1">语音模型 (Model ID)</label>
                                                     <div className="flex gap-2">
                                                         <select
-                                                            value={["eleven_v4", "eleven_turbo_v2_5", "eleven_multilingual_v2", "eleven_flash_v2_5"].includes(config.model || "") ? (config.model || "eleven_v4") : "__manual__"}
+                                                            value={["eleven_v4", "eleven_v4_turbo", "eleven_flash_v2_5", "eleven_v3", "eleven_multilingual_v2"].includes(config.model || "") ? config.model : "__manual__"}
                                                             onChange={(e) => {
                                                                 if (e.target.value !== "__manual__") {
                                                                     updateConfig(config.id, { model: e.target.value });
@@ -747,10 +747,11 @@ export function VoiceSettings() {
                                                             }}
                                                             className="ui-select flex-1"
                                                         >
-                                                            <option value="eleven_v4">eleven_v4 (最新 V4 旗舰模型 / 首选推荐)</option>
-                                                            <option value="eleven_turbo_v2_5">eleven_turbo_v2_5 (极速低延迟/高情感)</option>
-                                                            <option value="eleven_multilingual_v2">eleven_multilingual_v2 (支持中文/经典主力)</option>
-                                                            <option value="eleven_flash_v2_5">eleven_flash_v2_5 (高性价比极速版)</option>
+                                                            <option value="eleven_v4">eleven_v4 (旗舰多语言 / 最强情感表现力 / 90+语言 / 首选推荐)</option>
+                                                            <option value="eleven_v4_turbo">eleven_v4_turbo (实时极速 V4 / ~100ms低延迟 / 90+语言)</option>
+                                                            <option value="eleven_flash_v2_5">eleven_flash_v2_5 (极速省流 / ~75ms超低延迟 / 价格降低50%)</option>
+                                                            <option value="eleven_v3">eleven_v3 (拟人情感丰富模型 / 70+语言)</option>
+                                                            <option value="eleven_multilingual_v2">eleven_multilingual_v2 (经典多语言稳定版 / 29语言)</option>
                                                             <option value="__manual__">自定义模型 ID...</option>
                                                         </select>
                                                     </div>
@@ -758,10 +759,10 @@ export function VoiceSettings() {
                                                         type="text"
                                                         value={config.model || ""}
                                                         onChange={(e) => updateConfig(config.id, { model: e.target.value })}
-                                                        placeholder="可输入自定义模型 ID，如 eleven_v4 或 eleven_turbo_v2_5"
+                                                        placeholder="例如: eleven_v4 或 eleven_v4_turbo"
                                                         className="mt-1"
                                                     />
-                                                    <span className="menu-desc ml-1">支持 ElevenLabs 官方所有模型，支持直接输入自定义模型 ID</span>
+                                                    <span className="menu-desc ml-1">支持 ElevenLabs 官方全系列模型（V4 / V3 / Flash），支持直接输入自定义模型 ID</span>
                                                 </div>
                                                 <div className="flex flex-col gap-1">
                                                     <div className="flex items-center justify-between px-1">
