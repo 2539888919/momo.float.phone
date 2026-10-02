@@ -956,7 +956,25 @@ export function MascotFloat() {
     const wasDrag = dragState.current?.moved;
     dragState.current = null;
     if (longPressTriggered.current) { longPressTriggered.current = false; return; }
-    if (!wasDrag) toggleMascotPanel();
+    if (!wasDrag) {
+      toggleMascotPanel();
+    } else {
+      // 拖拽松手后自动贴边吸附至左右屏幕边缘
+      const el = floatRef.current;
+      const shell = el?.closest("[data-ui='phone-screen']") as HTMLElement | null;
+      const shellRect = shell?.getBoundingClientRect();
+      const shellW = shellRect?.width ?? (typeof window !== "undefined" ? window.innerWidth : 390);
+      const shellH = shellRect?.height ?? (typeof window !== "undefined" ? window.innerHeight : 844);
+      const currentPos = floatPosRef.current;
+      if (currentPos) {
+        const midX = shellW / 2;
+        const ballMidX = currentPos.left + MASCOT_FLOAT_WIDTH / 2;
+        const isLeft = ballMidX < midX;
+        const targetLeft = isLeft ? 8 : shellW - MASCOT_FLOAT_WIDTH - 8;
+        const targetTop = Math.max(64, Math.min(currentPos.top, shellH - MASCOT_FLOAT_HEIGHT - 64));
+        setFloatPos({ left: targetLeft, top: targetTop });
+      }
+    }
   }, []);
 
   const scrollMascotChatToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
@@ -1137,6 +1155,7 @@ export function MascotFloat() {
           -webkit-touch-callout: none;
           touch-action: none;
           will-change: transform;
+          transition: left 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), top 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
         }
         .mascot-flight-img {
           position: absolute;
