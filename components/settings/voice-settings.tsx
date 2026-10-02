@@ -739,7 +739,7 @@ export function VoiceSettings() {
                                                     <label className="menu-desc ml-1">语音模型 (Model ID)</label>
                                                     <div className="flex gap-2">
                                                         <select
-                                                            value={["eleven_v4", "eleven_v4_turbo", "eleven_flash_v2_5", "eleven_v3", "eleven_multilingual_v2"].includes(config.model || "") ? config.model : "__manual__"}
+                                                            value={["eleven_v4", "eleven_v4_turbo", "eleven_flash_v2_5", "eleven_v3", "eleven_multilingual_v2"].includes(config.model || "") ? (config.model || "eleven_v4") : "__manual__"}
                                                             onChange={(e) => {
                                                                 if (e.target.value !== "__manual__") {
                                                                     updateConfig(config.id, { model: e.target.value });
@@ -747,7 +747,7 @@ export function VoiceSettings() {
                                                             }}
                                                             className="ui-select flex-1"
                                                         >
-                                                            <option value="eleven_v4">eleven_v4 (旗舰多语言 / 最强情感表现力 / 90+语言 / 首选推荐)</option>
+                                                            <option value="eleven_v4">eleven_v4 (官方旗舰 V4 / 最强情感 / 90+语言 / 首选推荐)</option>
                                                             <option value="eleven_v4_turbo">eleven_v4_turbo (实时极速 V4 / ~100ms低延迟 / 90+语言)</option>
                                                             <option value="eleven_flash_v2_5">eleven_flash_v2_5 (极速省流 / ~75ms超低延迟 / 价格降低50%)</option>
                                                             <option value="eleven_v3">eleven_v3 (拟人情感丰富模型 / 70+语言)</option>

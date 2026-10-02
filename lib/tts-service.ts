@@ -41,82 +41,102 @@ export type TTSEmotionContext = {
 };
 
 /**
- * 智能情绪与语速分析器：
- * 1. 扫描标签（括号、星号、方括号）中蕴含的角色情绪和语速指令，转化为 TTS 的原生控制参数；
- * 2. 彻底抹去所有描写括号、星号、标签文本，只保留干净台词，坚决不念标签！
+ * 智能音频控制指令与情绪提取引擎：
+ * 1. 深度解析尖括号英文情绪：<whisper>, <happy>, <sad>, <angry>, <excited>, <sigh>, <giggle>, <speed="1.2"> 等
+ * 2. 深度解析井号语速与控制指令：#speed:1.2, #speed=1.2, #1.2x, #fast, #slow, #whisper, #happy 等
+ * 3. 提取完成后，地毯式抹去尖括号、井号指令、圆括号动作、黑括号，杜绝 TTS 念出任何标签字符！
  */
 export function extractTTSEmotionAndCleanText(rawText: string): TTSEmotionContext {
     if (!rawText) return { cleanText: "", speedMultiplier: 1.0 };
-
-    // 1. 抓取所有可能包含神态动作描写的片段
-    const bracketMatches = rawText.match(/[（(【〔〖\[][^）)〕〗\]]+[）)〕〗\]]|\*[^*]+\*|<[^>]+>/g) || [];
-    const metaStr = bracketMatches.join(" ").toLowerCase();
 
     let emotion: TTSEmotionContext["emotion"] = undefined;
     let speedMultiplier = 1.0;
     let stability: number | undefined = undefined;
     let style: number | undefined = undefined;
 
-    // 情绪与语调探测
-    if (/开心|高兴|兴奋|欢快|大笑|微笑|欣喜|激动|庆祝|happy|laugh|excited|joy/.test(metaStr)) {
+    const lower = rawText.toLowerCase();
+
+    // ── 1. 井号语速指令提取 (#speed:1.2, #speed=1.3, #1.2x, #fast, #slow) ──
+    const speedNumMatch = lower.match(/#(?:speed|rate)[:=]?([0-9.]+)|#([0-9.]+)x/);
+    if (speedNumMatch) {
+        const val = parseFloat(speedNumMatch[1] || speedNumMatch[2]);
+        if (Number.isFinite(val) && val >= 0.5 && val <= 2.5) {
+            speedMultiplier = val;
+        }
+    }
+    if (/#(?:fast|quick|急促|快点)/.test(lower)) {
+        speedMultiplier = Math.max(speedMultiplier, 1.2);
+    } else if (/#(?:slow|hesitant|缓慢|慢点)/.test(lower)) {
+        speedMultiplier = Math.min(speedMultiplier, 0.82);
+    }
+
+    // ── 2. 尖括号语速指令提取 (<speed="1.2">, <speed: 1.2>, <speed=fast>) ──
+    const tagSpeedMatch = lower.match(/<speed[:=]["']?([0-9.]+)["']?>/);
+    if (tagSpeedMatch) {
+        const val = parseFloat(tagSpeedMatch[1]);
+        if (Number.isFinite(val) && val >= 0.5 && val <= 2.5) {
+            speedMultiplier = val;
+        }
+    }
+
+    // ── 3. 尖括号与井号英文情绪提取 (<whisper>, <happy>, <sad>, <angry>, <excited> 等) ──
+    if (/<(?:whisper|whispering|soft|gentle|mumble|sigh|murmur)\b[^>]*>|#(?:whisper|soft)|（(?:轻声|耳语|温柔|呢喃|低语)）/.test(lower)) {
+        emotion = "calm";
+        speedMultiplier = Math.min(speedMultiplier, 0.92);
+        stability = 0.65;
+        style = 0.45;
+    } else if (/<(?:happy|joy|laugh|laughing|giggle|smile|cheerful|excited)\b[^>]*>|#(?:happy|joy|excited)|（(?:开心|大笑|微笑|兴奋|欣喜)）/.test(lower)) {
         emotion = "happy";
-        speedMultiplier = 1.08;
+        speedMultiplier = Math.max(speedMultiplier, 1.08);
         stability = 0.35;
-        style = 0.65;
-    } else if (/悲伤|难过|伤心|哭|哽咽|委屈|落泪|心疼|绝望|沮丧|sad|cry|weep|sorrow|tear/.test(metaStr)) {
+        style = 0.7;
+    } else if (/<(?:sad|cry|crying|sob|sobbing|weep|sorrow|tear|depressed)\b[^>]*>|#(?:sad|cry)|（(?:悲伤|哭泣|哽咽|难过|委屈|落泪)）/.test(lower)) {
         emotion = "sad";
-        speedMultiplier = 0.88;
+        speedMultiplier = Math.min(speedMultiplier, 0.88);
         stability = 0.4;
         style = 0.55;
-    } else if (/愤怒|生气|暴怒|发火|恼火|咬牙|咆哮|怒吼|angry|furious|rage|yell/.test(metaStr)) {
+    } else if (/<(?:angry|anger|rage|shout|yell|furious|growl)\b[^>]*>|#(?:angry|rage)|（(?:愤怒|生气|怒吼|咆哮|咬牙)）/.test(lower)) {
         emotion = "angry";
-        speedMultiplier = 1.15;
+        speedMultiplier = Math.max(speedMultiplier, 1.15);
         stability = 0.28;
-        style = 0.75;
-    } else if (/温柔|轻柔|耳语|小声|呢喃|轻语|低语|微弱|害羞|脸红|whisper|soft|gentle|shy/.test(metaStr)) {
-        emotion = "calm";
-        speedMultiplier = 0.92;
-        stability = 0.58;
-        style = 0.45;
-    } else if (/害怕|惊恐|恐惧|颤抖|发抖|慌张|恐慌|fear|scared|terrified|shiver/.test(metaStr)) {
+        style = 0.8;
+    } else if (/<(?:fear|scared|terrified|shiver|tremble)\b[^>]*>|#(?:fear|scared)|（(?:害怕|恐惧|发抖|慌张)）/.test(lower)) {
         emotion = "fearful";
         speedMultiplier = 1.1;
-        stability = 0.32;
+        stability = 0.3;
         style = 0.6;
-    } else if (/惊讶|吃惊|震惊|诧异|目瞪口呆|surprised|shocked|gasp/.test(metaStr)) {
+    } else if (/<(?:surprised|surprise|shock|shocked|gasp)\b[^>]*>|#(?:surprised|shock)|（(?:惊讶|震惊|倒吸一口凉气)）/.test(lower)) {
         emotion = "surprised";
         speedMultiplier = 1.05;
         stability = 0.38;
         style = 0.5;
-    } else if (/冷漠|严肃|冷静|平淡|漠然|calm|cold|serious/.test(metaStr)) {
+    } else if (/<(?:calm|cold|serious|neutral)\b[^>]*>|#(?:calm|serious)|（(?:冷静|严肃|平淡)）/.test(lower)) {
         emotion = "calm";
         speedMultiplier = 0.98;
         stability = 0.75;
         style = 0.15;
     }
 
-    // 语速专项探测
-    if (/快点|急促|焦急|语速快|匆匆|fast|hurry|quick/.test(metaStr)) {
-        speedMultiplier = Math.min(1.4, speedMultiplier * 1.2);
-    } else if (/慢点|缓缓|语速慢|迟疑|拉长|slow|hesitant/.test(metaStr)) {
-        speedMultiplier = Math.max(0.7, speedMultiplier * 0.82);
-    }
-
-    // 2. 彻底清洗文本：不给 TTS 留任何念标签的借口
+    // ── 4. 彻底清洗文本，不留任何发音标签 ──
     let clean = rawText
-        // 剥离大段思考块
-        .replace(/<([a-zA-Z0-9_-]+)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
-        .replace(/<[^>]+>/g, "")
-        // 剥离中英文圆括号内的动作/心理描写
+        // 彻底丢弃思考块与动作块标签及其内容
+        .replace(/<(?:think|thought|context|action|scene|state)\b[^>]*>[\s\S]*?<\/(?:think|thought|context|action|scene|state)>/gi, "")
+        // 剥离剩余的所有成对尖括号标签或单标签 (如 <whisper>, </whisper>, <speed="1.2">, <happy>, <br/>)
+        .replace(/<\/?[a-zA-Z0-9_-]+(?:\s+[^>]*)*>/g, "")
+        // 剥离井号指令 (如 #speed:1.2, #happy, #1.2x, #fast, #whisper)
+        .replace(/#(?:speed|rate)[:=]?[0-9.]+[a-z]?\b/gi, "")
+        .replace(/#[0-9.]+[a-z]?\b/gi, "")
+        .replace(/#(?:happy|sad|angry|whisper|excited|fast|slow|calm|soft|giggle|cry)\b/gi, "")
+        // 剥离所有中英文圆括号内的神态动作描写 （...） (...)
         .replace(/[（(][^）)]*[）)]/g, "")
-        // 剥离方括号、黑括号内的指令与旁白
+        // 剥离所有黑括号、方括号内的指令与状态 【...】 [...] 〔...〕
         .replace(/[【〔〖\[][^】〕〗\]]*[】〕〗\]]/g, "")
-        // 剥离 Markdown 星号强调或星号动作
+        // 剥离 Markdown 强调符号与星号
         .replace(/\*{1,3}[^*]+\*{1,3}/g, "")
         .replace(/\*/g, "")
-        // 剥离链接
+        // 剥离网址
         .replace(/https?:\/\/\S+/gi, "")
-        // 剥离 Markdown 标题、引用符号
+        // 剥离 Markdown 标题与引用符号
         .replace(/^[#>\-\s]+/gm, "")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
@@ -262,12 +282,10 @@ async function synthesizeMinimax(text: string, config: VoiceApiConfig, emotion?:
 
 // ── OpenAI TTS ──────────────────────────────────────
 
-async function synthesizeOpenAI(text: string, config: VoiceApiConfig, speedMultiplier = 1.0): Promise<Blob | null> {
+async function synthesizeOpenAI(text: string, config: VoiceApiConfig): Promise<Blob | null> {
     if (!config.apiKey) throw new Error("OpenAI API Key 未配置");
 
     const baseUrl = config.baseUrl || "https://api.openai.com/v1";
-    const baseSpeed = typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed) ? config.speechSpeed : 1.0;
-    const finalSpeed = Math.min(2.0, Math.max(0.25, baseSpeed * speedMultiplier));
     const response = await fetchWithTimeout(`${baseUrl.replace(/\/$/, "")}/audio/speech`, {
         method: "POST",
         headers: {
@@ -279,7 +297,9 @@ async function synthesizeOpenAI(text: string, config: VoiceApiConfig, speedMulti
             input: text,
             voice: config.defaultVoice || "alloy",
             response_format: "mp3",
-            speed: finalSpeed,
+            ...(typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed)
+                ? { speed: Math.min(2, Math.max(0.5, config.speechSpeed)) }
+                : {}),
         }),
     });
 
