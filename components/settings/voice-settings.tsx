@@ -260,6 +260,11 @@ export function VoiceSettings() {
     const [fetchedVoices, setFetchedVoices] = useState<Record<string, VoiceOption[]>>({});
     const [fetchError, setFetchError] = useState<Record<string, string>>({});
 
+    // Fetching states for Models (ElevenLabs 动态拉取模型)
+    const [fetchedModels, setFetchedModels] = useState<Record<string, { id: string; name: string }[]>>({});
+    const [isFetchingModels, setIsFetchingModels] = useState<Record<string, boolean>>({});
+    const [fetchModelError, setFetchModelError] = useState<Record<string, string>>({});
+
     // Load from localStorage on mount
     useEffect(() => {
         const stored = loadVoiceConfigs();
@@ -558,6 +563,44 @@ export function VoiceSettings() {
         }
     };
 
+    const fetchModels = async (config: VoiceApiConfig) => {
+        if (!config.apiKey.trim()) {
+            setFetchModelError(prev => ({ ...prev, [config.id]: "请先填写 API Key 后再拉取模型" }));
+            return;
+        }
+        setIsFetchingModels(prev => ({ ...prev, [config.id]: true }));
+        setFetchModelError(prev => ({ ...prev, [config.id]: "" }));
+        try {
+            const baseUrl = (config.baseUrl || "https://api.elevenlabs.io/v1").replace(/\/$/, "");
+            const safeKey = config.apiKey.trim().replace(/[^\x00-\x7F]/g, "");
+            const res = await fetch(`${baseUrl}/models`, {
+                headers: { "xi-api-key": safeKey },
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail?.message || `拉取模型失败 (${res.status})`);
+            }
+            const data = await res.json();
+            const models = (Array.isArray(data) ? data : [])
+                .filter((m: any) => m.can_do_text_to_speech !== false)
+                .map((m: any) => ({
+                    id: m.model_id,
+                    name: m.name ? `${m.name} (${m.model_id})` : m.model_id,
+                }));
+            if (models.length === 0) throw new Error("未获取到支持语音合成的模型");
+            setFetchedModels(prev => ({ ...prev, [config.id]: models }));
+            if (!config.model || !models.some((m: any) => m.id === config.model)) {
+                const preferred = models.find((m: any) => m.id === "eleven_v4")?.id || models[0].id;
+                updateConfig(config.id, { model: preferred });
+            }
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            setFetchModelError(prev => ({ ...prev, [config.id]: msg }));
+        } finally {
+            setIsFetchingModels(prev => ({ ...prev, [config.id]: false }));
+        }
+    };
+
     const togglePreview = async (config: VoiceApiConfig) => {
         if (playingVoiceId === config.id) {
             if (audioRef.current) {
@@ -736,32 +779,49 @@ export function VoiceSettings() {
                                                     />
                                                 </div>
                                                 <div className="flex flex-col gap-1">
-                                                    <label className="menu-desc ml-1">语音模型 (Model ID)</label>
+                                                    <div className="flex items-center justify-between">
+                                                        <label className="menu-desc ml-1">语音模型 (Model ID)</label>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => fetchModels(config)}
+                                                            disabled={isFetchingModels[config.id]}
+                                                            className="ui-link-btn text-xs flex items-center gap-1 text-[var(--c-accent)]"
+                                                        >
+                                                            <RefreshCw size={12} className={isFetchingModels[config.id] ? "animate-spin" : ""} />
+                                                            <span>{isFetchingModels[config.id] ? "正在拉取..." : "拉取官方模型"}</span>
+                                                        </button>
+                                                    </div>
                                                     <div className="flex gap-2">
                                                         <select
-                                                            value={["eleven_v4", "eleven_flash_v2_5", "eleven_v3", "eleven_multilingual_v2"].includes(config.model || "") ? (config.model || "eleven_v4") : "__manual__"}
-                                                            onChange={(e) => {
-                                                                if (e.target.value !== "__manual__") {
-                                                                    updateConfig(config.id, { model: e.target.value });
-                                                                }
-                                                            }}
+                                                            value={config.model || "eleven_v4"}
+                                                            onChange={(e) => updateConfig(config.id, { model: e.target.value })}
                                                             className="ui-select flex-1"
                                                         >
-                                                            <option value="eleven_v4">eleven_v4 (官方最新 V4 旗舰 / text-to-dialogue 端点 / 默认推荐)</option>
-                                                            <option value="eleven_flash_v2_5">eleven_flash_v2_5 (极速省流 / ~75ms超低延迟 / 价格降低50%)</option>
-                                                            <option value="eleven_v3">eleven_v3 (拟人表现力模型 / 70+语言)</option>
-                                                            <option value="eleven_multilingual_v2">eleven_multilingual_v2 (经典多语言稳定版 / 29语言)</option>
-                                                            <option value="__manual__">自定义模型 ID...</option>
+                                                            {fetchedModels[config.id] && fetchedModels[config.id].length > 0 ? (
+                                                                fetchedModels[config.id].map(m => (
+                                                                    <option key={m.id} value={m.id}>{m.name}</option>
+                                                                ))
+                                                            ) : (
+                                                                <>
+                                                                    <option value="eleven_v4">eleven_v4 (官方旗舰 V4 / text-to-dialogue 端点 / 默认推荐)</option>
+                                                                    <option value="eleven_flash_v2_5">eleven_flash_v2_5 (极速省流 / ~75ms超低延迟 / 价格降低50%)</option>
+                                                                    <option value="eleven_v3">eleven_v3 (拟人表现力模型 / 70+语言)</option>
+                                                                    <option value="eleven_multilingual_v2">eleven_multilingual_v2 (经典多语言稳定版 / 29语言)</option>
+                                                                </>
+                                                            )}
                                                         </select>
                                                     </div>
+                                                    {fetchModelError[config.id] && (
+                                                        <span className="text-xs text-red-500 ml-1">{fetchModelError[config.id]}</span>
+                                                    )}
                                                     <Input
                                                         type="text"
                                                         value={config.model || "eleven_v4"}
                                                         onChange={(e) => updateConfig(config.id, { model: e.target.value })}
-                                                        placeholder="默认: eleven_v4"
+                                                        placeholder="例如: eleven_v4"
                                                         className="mt-1"
                                                     />
-                                                    <span className="menu-desc ml-1">已适配 V4 专属端点与 inputs 架构，原生支持 [whispers]、[laughs] 等音频标记</span>
+                                                    <span className="menu-desc ml-1">输入 Key 后点击右上角「拉取官方模型」可直接从你账户动态同步最新可用模型列表</span>
                                                 </div>
                                                 <div className="flex flex-col gap-1">
                                                     <div className="flex items-center justify-between px-1">
