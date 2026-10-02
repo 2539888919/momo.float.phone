@@ -739,7 +739,7 @@ export function VoiceSettings() {
                                                     <label className="menu-desc ml-1">语音模型 (Model ID)</label>
                                                     <div className="flex gap-2">
                                                         <select
-                                                            value={["eleven_v4", "eleven_flash_v2_5", "eleven_v3", "eleven_multilingual_v2"].includes(config.model || "") ? (config.model || "eleven_v4") : "__manual__"}
+                                                            value={["eleven_v4", "eleven_multilingual_v2", "eleven_flash_v2_5"].includes(config.model || "") ? (config.model || "eleven_v4") : "__manual__"}
                                                             onChange={(e) => {
                                                                 if (e.target.value !== "__manual__") {
                                                                     updateConfig(config.id, { model: e.target.value });
@@ -747,21 +747,20 @@ export function VoiceSettings() {
                                                             }}
                                                             className="ui-select flex-1"
                                                         >
-                                                            <option value="eleven_v4">eleven_v4 (新架构 V4 / text-to-dialogue 端点 / 支持[laughs][whispers] / 首选推荐)</option>
-                                                            <option value="eleven_flash_v2_5">eleven_flash_v2_5 (极速省流 / ~75ms超低延迟 / 价格降低50%)</option>
-                                                            <option value="eleven_v3">eleven_v3 (拟人表现力模型 / 70+语言)</option>
-                                                            <option value="eleven_multilingual_v2">eleven_multilingual_v2 (经典多语言稳定版 / 29语言)</option>
+                                                            <option value="eleven_v4">eleven_v4 (旗舰 V4 / text-to-dialogue 端点 / 默认推荐)</option>
+                                                            <option value="eleven_multilingual_v2">eleven_multilingual_v2 (经典多语言 v2)</option>
+                                                            <option value="eleven_flash_v2_5">eleven_flash_v2_5 (超低延迟 75ms / 省流版)</option>
                                                             <option value="__manual__">自定义模型 ID...</option>
                                                         </select>
                                                     </div>
                                                     <Input
                                                         type="text"
-                                                        value={config.model || ""}
+                                                        value={config.model || "eleven_v4"}
                                                         onChange={(e) => updateConfig(config.id, { model: e.target.value })}
-                                                        placeholder="例如: eleven_v4 或 eleven_flash_v2_5"
+                                                        placeholder="默认: eleven_v4"
                                                         className="mt-1"
                                                     />
-                                                    <span className="menu-desc ml-1">已适配 V4 专属 text-to-dialogue 架构，原生支持 [laughs]、[whispers] 等音频情感标记</span>
+                                                    <span className="menu-desc ml-1">已适配 V4 专属端点与 inputs 架构，原生支持 [laughs]、[whispers] 音频标记</span>
                                                 </div>
                                                 <div className="flex flex-col gap-1">
                                                     <div className="flex items-center justify-between px-1">

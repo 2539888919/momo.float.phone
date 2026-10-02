@@ -32,88 +32,28 @@ export function resolveVoiceConfig(characterId: string, appId?: ContentAppId): V
  * 2. 过滤星号动作/旁白描写，如 *轻轻一笑*
  * 3. 过滤系统方括号指令，如 [内心:xxx], [动作:xxx], [表情:xxx]
  */
-export type TTSEmotionContext = {
-    cleanText: string;
-    v4TaggedText: string;
-    emotion?: "happy" | "sad" | "angry" | "fearful" | "disgusted" | "surprised" | "calm" | "neutral";
-    speedMultiplier: number;
-    stability?: number;
-};
-
-// ElevenLabs 官方 V4 原生支持的音频情感与动效标签白名单
-const ELEVEN_V4_VALID_TAGS = new Set([
-    "[curious]", "[crying]", "[mischievously]", "[furious]", "[excited]", "[sarcastic]",
-    "[whispers]", "[shouts]", "[laughs]", "[clears throat]", "[sighs]",
-    "[pause]", "[long pause]", "[applause]", "[phone buzzing]", "[light rain]"
+const V4_AUDIO_TAGS = new Set([
+    "[whispers]", "[laughs]", "[sighs]", "[crying]", "[furious]", "[excited]", "[curious]", "[shouts]", "[pause]"
 ]);
 
-/**
- * 智能音频控制指令与情绪提取引擎：
- * 1. 深度解析尖括号与中文动作标签，精准映射为 ElevenLabs V4 官方音频动效标签 (如 [whispers], [laughs], [sighs], [furious])；
- * 2. 严格保留官方合法音频标签，地毯式过滤掉非音频动作与系统指令，杜绝任何杂音念出！
- */
-export function extractTTSEmotionAndCleanText(rawText: string): TTSEmotionContext {
-    if (!rawText) return { cleanText: "", v4TaggedText: "", speedMultiplier: 1.0 };
-
-    let emotion: TTSEmotionContext["emotion"] = undefined;
-    let speedMultiplier = 1.0;
-    let stability: number | undefined = undefined;
-
-    const lower = rawText.toLowerCase();
-
-    // ── 1. 语速指令提取 ──
-    const speedNumMatch = lower.match(/#(?:speed|rate)[:=]?([0-9.]+)|#([0-9.]+)x|<speed[:=]["']?([0-9.]+)["']?>/);
-    if (speedNumMatch) {
-        const val = parseFloat(speedNumMatch[1] || speedNumMatch[2] || speedNumMatch[3]);
-        if (Number.isFinite(val) && val >= 0.5 && val <= 2.5) {
-            speedMultiplier = val;
-        }
-    }
-    if (/#(?:fast|quick|急促|快点)/.test(lower)) {
-        speedMultiplier = Math.max(speedMultiplier, 1.2);
-    } else if (/#(?:slow|hesitant|缓慢|慢点)/.test(lower)) {
-        speedMultiplier = Math.min(speedMultiplier, 0.82);
-    }
-
-    // ── 2. 情绪分析 ──
-    if (/<(?:whisper|whispering|soft|gentle|mumble|sigh|murmur)\b[^>]*>|#(?:whisper|soft)|（(?:轻声|耳语|温柔|呢喃|低语)）/.test(lower)) {
-        emotion = "calm";
-        stability = 0.65;
-    } else if (/<(?:happy|joy|laugh|laughing|giggle|smile|cheerful|excited)\b[^>]*>|#(?:happy|joy|excited)|（(?:开心|大笑|微笑|兴奋|欣喜)）/.test(lower)) {
-        emotion = "happy";
-        stability = 0.35;
-    } else if (/<(?:sad|cry|crying|sob|sobbing|weep|sorrow|tear|depressed)\b[^>]*>|#(?:sad|cry)|（(?:悲伤|哭泣|哽咽|难过|委屈|落泪)）/.test(lower)) {
-        emotion = "sad";
-        stability = 0.4;
-    } else if (/<(?:angry|anger|rage|shout|yell|furious|growl)\b[^>]*>|#(?:angry|rage)|（(?:愤怒|生气|怒吼|咆哮|咬牙)）/.test(lower)) {
-        emotion = "angry";
-        stability = 0.28;
-    }
-
-    // ── 3. 将输入中的尖括号、中文动作精准转化为 ElevenLabs V4 官方音频标签 ──
-    let v4Text = rawText
+export function prepareTextForElevenLabsV4(rawText: string): string {
+    if (!rawText) return "";
+    // 将尖括号英文情绪/动作翻译为官方 V4 允许的标签
+    let text = rawText
         .replace(/<(?:whisper|whispering|soft)\b[^>]*>[\s\S]*?<\/(?:whisper|whispering|soft)>/gi, (m) => `[whispers] ${m.replace(/<[^>]+>/g, "")}`)
         .replace(/<(?:whisper|whispering|soft)\b[^>]*>|#whisper|（(?:轻声|耳语|低语)）/gi, "[whispers] ")
         .replace(/<(?:laugh|laughing|giggle)\b[^>]*>|#laugh|（(?:大笑|轻笑|偷笑)）/gi, "[laughs] ")
         .replace(/<(?:sigh)\b[^>]*>|#sigh|（(?:叹气|叹息)）/gi, "[sighs] ")
-        .replace(/<(?:cry|crying|sob)\b[^>]*>|#cry|（(?:哭泣|哽咽)）/gi, "[crying] ")
-        .replace(/<(?:angry|furious|shout)\b[^>]*>|#angry|（(?:愤怒|怒吼|生气)）/gi, "[furious] ")
-        .replace(/<(?:excited)\b[^>]*>|#excited|（(?:兴奋|激动)）/gi, "[excited] ");
+        .replace(/<(?:cry|crying|sob)\b[^>]*>|#cry|（(?:哭泣|哽咽)）/gi, "[crying] ");
 
-    // ── 4. 彻底清洗非官方音频标签与所有杂质 ──
-    // 剥离思考块与动作块
-    v4Text = v4Text
-        .replace(/<(?:think|thought|context|action|scene|state)\b[^>]*>[\s\S]*?<\/(?:think|thought|context|action|scene|state)>/gi, "")
+    // 剔除思考块、非白名单标签与多余符号
+    text = text
+        .replace(/<(?:think|thought|context)\b[^>]*>[\s\S]*?<\/(?:think|thought|context)>/gi, "")
         .replace(/<\/?[a-zA-Z0-9_-]+(?:\s+[^>]*)*>/g, "")
-        .replace(/#(?:speed|rate)[:=]?[0-9.]+[a-z]?\b/gi, "")
-        .replace(/#[0-9.]+[a-z]?\b/gi, "")
-        .replace(/#(?:happy|sad|angry|whisper|excited|fast|slow|calm|soft|giggle|cry)\b/gi, "")
+        .replace(/#[a-zA-Z0-9_:=.]+\b/g, "")
         .replace(/[（(][^）)]*[）)]/g, "")
-        // 只保留官方合法 V4 标签，清洗其他中英文方括号与黑括号
-        .replace(/\[([^\]]+)\]/g, (match) => {
-            const lowerTag = match.toLowerCase();
-            return ELEVEN_V4_VALID_TAGS.has(lowerTag) ? match : "";
-        })
+        // 保留官方合法 V4 标签 ([whispers], [laughs] 等)，其余方括号/黑括号清洗
+        .replace(/\[([^\]]+)\]/g, (match) => V4_AUDIO_TAGS.has(match.toLowerCase()) ? match : "")
         .replace(/[【〔〖][^】〕〗]*[】〕〗]/g, "")
         .replace(/\*{1,3}[^*]+\*{1,3}/g, "")
         .replace(/\*/g, "")
@@ -122,20 +62,12 @@ export function extractTTSEmotionAndCleanText(rawText: string): TTSEmotionContex
         .replace(/\n{3,}/g, "\n\n")
         .trim();
 
-    // 普通 TTS 模式纯台词 (剥离一切方括号)
-    const clean = v4Text.replace(/\[[^\]]+\]/g, "").trim();
-
-    return {
-        cleanText: clean,
-        v4TaggedText: v4Text || clean,
-        emotion,
-        speedMultiplier,
-        stability,
-    };
+    return text;
 }
 
 export function sanitizeTextForTTS(rawText: string): string {
-    return extractTTSEmotionAndCleanText(rawText).cleanText;
+    if (!rawText) return "";
+    return prepareTextForElevenLabsV4(rawText).replace(/\[[^\]]+\]/g, "").trim();
 }
 
 export async function synthesizeSpeech(
@@ -143,21 +75,23 @@ export async function synthesizeSpeech(
     voiceConfig: VoiceApiConfig,
     options?: { emotion?: string },
 ): Promise<Blob | null> {
-    const ctx = extractTTSEmotionAndCleanText(text);
-    if (!ctx.cleanText && !ctx.v4TaggedText) return null;
-
     const provider = voiceConfig.provider;
 
+    if (provider === "ElevenLabs") {
+        const v4Text = prepareTextForElevenLabsV4(text);
+        if (!v4Text) return null;
+        return synthesizeElevenLabs(v4Text, voiceConfig);
+    }
+
+    const cleanText = sanitizeTextForTTS(text);
+    if (!cleanText) return null;
+
     if (provider === "Minimax") {
-        return synthesizeMinimax(ctx.cleanText, voiceConfig, ctx.emotion || options?.emotion, ctx.speedMultiplier);
+        return synthesizeMinimax(cleanText, voiceConfig, options?.emotion);
     }
 
     if (provider === "OpenAI") {
-        return synthesizeOpenAI(ctx.cleanText, voiceConfig, ctx.speedMultiplier);
-    }
-
-    if (provider === "ElevenLabs") {
-        return synthesizeElevenLabs(ctx.cleanText, voiceConfig, ctx);
+        return synthesizeOpenAI(cleanText, voiceConfig);
     }
 
     return null;
@@ -296,67 +230,36 @@ async function synthesizeOpenAI(text: string, config: VoiceApiConfig): Promise<B
 
 // ── ElevenLabs TTS ──────────────────────────────────
 
-async function synthesizeElevenLabs(text: string, config: VoiceApiConfig, ctx?: TTSEmotionContext): Promise<Blob | null> {
+async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promise<Blob | null> {
     if (!config.apiKey) throw new Error("ElevenLabs API Key 未配置");
 
     const baseUrl = (config.baseUrl || "https://api.elevenlabs.io/v1").replace(/\/$/, "");
     const voiceId = config.defaultVoice || "21m00Tcm4TlvDq8ikWAM";
-    let modelId = config.model || "eleven_v4";
-
-    // 容错：eleven_v4_turbo 仅在 WebSocket 支持，若用户配在 HTTP 请求中自动平滑回退至 eleven_v4
-    if (modelId === "eleven_v4_turbo") {
-        modelId = "eleven_v4";
-    }
-
     const safeApiKey = config.apiKey.trim().replace(/[^\x00-\x7F]/g, "");
-    const isV4 = modelId === "eleven_v4" || modelId.startsWith("eleven_v4");
 
-    let url: string;
-    let requestBody: Record<string, unknown>;
+    // 1. 端点强制改为官方 V4 text-to-dialogue 端点
+    const url = `${baseUrl}/text-to-dialogue?output_format=mp3_44100_128`;
 
-    if (isV4) {
-        // ── 官方 V4 架构：强制走 /v1/text-to-dialogue 端点，采用 inputs 数组结构，output_format=mp3_44100_128 全套餐通用 ──
-        url = `${baseUrl}/text-to-dialogue?output_format=mp3_44100_128`;
-        const v4Text = ctx?.v4TaggedText || text;
-
-        requestBody = {
-            model_id: "eleven_v4",
-            inputs: [
-                {
-                    text: v4Text,
-                    voice_id: voiceId,
-                    new_turn: false,
-                },
-            ],
-            voices: [
-                {
-                    voice_id: voiceId,
-                    voice_settings: {
-                        stability: ctx?.stability ?? 0.5,
-                        similarity_boost: 0.75,
-                        use_speaker_boost: true,
-                    },
-                },
-            ],
-        };
-    } else {
-        // ── 传统模型架构 (v3 / multilingual_v2 / flash_v2_5)：走 /v1/text-to-speech/{voice_id} ──
-        url = `${baseUrl}/text-to-speech/${voiceId}`;
-        const baseSpeed = typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed)
-            ? config.speechSpeed
-            : 1.0;
-        const finalSpeed = Math.min(2.0, Math.max(0.5, baseSpeed * (ctx?.speedMultiplier ?? 1.0)));
-
-        requestBody = {
-            text: ctx?.cleanText || text,
-            model_id: modelId,
-            voice_settings: {
-                stability: ctx?.stability ?? 0.5,
-                similarity_boost: 0.75,
-                speed: finalSpeed,
+    // 2. 请求体严格遵循官方 V4 规范：inputs 数组 + 移除 style 与 speed
+    const requestBody = {
+        model_id: "eleven_v4",
+        inputs: [
+            {
+                text: text, // 内部保留 [whispers]、[laughs] 等合法音频标记
+                voice_id: voiceId,
+                new_turn: false,
             },
-        };
-    }
+        ],
+        voices: [
+            {
+                voice_id: voiceId,
+                voice_settings: {
+                    stability: 0.5,
+                    similarity_boost: 0.75,
+                },
+            },
+        ],
+    };
 
     const response = await fetchWithTimeout(url, {
         method: "POST",
@@ -375,10 +278,10 @@ async function synthesizeElevenLabs(text: string, config: VoiceApiConfig, ctx?: 
 
     const charCost = response.headers.get("character-cost");
     if (charCost) {
-        console.log(`[ElevenLabs TTS] 生成成功 (model: ${modelId})，消耗字符: ${charCost}，情绪: ${ctx?.emotion || "自然"}`);
+        console.log(`[ElevenLabs V4] 生成成功，消耗字符: ${charCost}`);
     }
 
-    // 兼容 text-to-dialogue 返回 JSON(带 base64 audio) 或 直接二进制流
+    // 兼容返回 JSON(带 base64 audio) 或 直接二进制音频流
     const contentType = response.headers.get("content-type") || "";
     if (contentType.includes("application/json")) {
         const json = await response.json().catch(() => ({}));
