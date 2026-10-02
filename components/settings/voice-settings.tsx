@@ -747,7 +747,7 @@ export function VoiceSettings() {
                                                             }}
                                                             className="ui-select flex-1"
                                                         >
-                                                            <option value="eleven_v4">eleven_v4 (官方最新 V4 旗舰 / 最高音质 / 首选推荐)</option>
+                                                            <option value="eleven_v4">eleven_v4 (新架构 V4 / text-to-dialogue 端点 / 支持[laughs][whispers] / 首选推荐)</option>
                                                             <option value="eleven_flash_v2_5">eleven_flash_v2_5 (极速省流 / ~75ms超低延迟 / 价格降低50%)</option>
                                                             <option value="eleven_v3">eleven_v3 (拟人表现力模型 / 70+语言)</option>
                                                             <option value="eleven_multilingual_v2">eleven_multilingual_v2 (经典多语言稳定版 / 29语言)</option>
@@ -761,7 +761,7 @@ export function VoiceSettings() {
                                                         placeholder="例如: eleven_v4 或 eleven_flash_v2_5"
                                                         className="mt-1"
                                                     />
-                                                    <span className="menu-desc ml-1">支持 ElevenLabs 官方各代模型。注：V4 仅支持 stability 与 similarity_boost 控制</span>
+                                                    <span className="menu-desc ml-1">已适配 V4 专属 text-to-dialogue 架构，原生支持 [laughs]、[whispers] 等音频情感标记</span>
                                                 </div>
                                                 <div className="flex flex-col gap-1">
                                                     <div className="flex items-center justify-between px-1">
