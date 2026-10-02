@@ -501,6 +501,21 @@ export function MascotFloat() {
   const longPressTriggered = useRef(false);
   const floatRef = useRef<HTMLDivElement>(null);
   const [animStyle, setAnimStyle] = useState<React.CSSProperties>({});
+  const [isDocked, setIsDocked] = useState(false);
+  const [dockSide, setDockSide] = useState<"left" | "right">("right");
+  const dockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const resetDockTimer = useCallback(() => {
+    if (dockTimerRef.current) clearTimeout(dockTimerRef.current);
+    dockTimerRef.current = setTimeout(() => {
+      setIsDocked(true);
+    }, 3000);
+  }, []);
+
+  const wakeFromDock = useCallback(() => {
+    setIsDocked(false);
+    resetDockTimer();
+  }, [resetDockTimer]);
 
   useEffect(() => {
     floatPosRef.current = floatPos;
@@ -915,6 +930,7 @@ export function MascotFloat() {
 
   // Drag handlers
   const handlePointerDown = useCallback((e: ReactPointerEvent) => {
+    wakeFromDock();
     longPressTriggered.current = false;
     const el = floatRef.current;
     if (!el) return;
@@ -935,7 +951,7 @@ export function MascotFloat() {
       }
     }, 600);
     el.setPointerCapture(e.pointerId);
-  }, []);
+  }, [wakeFromDock]);
 
   const handlePointerMove = useCallback((e: ReactPointerEvent) => {
     if (!dragState.current) return;
@@ -957,9 +973,13 @@ export function MascotFloat() {
     dragState.current = null;
     if (longPressTriggered.current) { longPressTriggered.current = false; return; }
     if (!wasDrag) {
-      toggleMascotPanel();
+      if (isDocked) {
+        wakeFromDock();
+      } else {
+        toggleMascotPanel();
+      }
     } else {
-      // 拖拽松手后自动贴边吸附至左右屏幕边缘
+      // 拖拽松手自动贴边吸附，并启动 3 秒后半折叠
       const el = floatRef.current;
       const shell = el?.closest("[data-ui='phone-screen']") as HTMLElement | null;
       const shellRect = shell?.getBoundingClientRect();
@@ -973,9 +993,11 @@ export function MascotFloat() {
         const targetLeft = isLeft ? 8 : shellW - MASCOT_FLOAT_WIDTH - 8;
         const targetTop = Math.max(64, Math.min(currentPos.top, shellH - MASCOT_FLOAT_HEIGHT - 64));
         setFloatPos({ left: targetLeft, top: targetTop });
+        setDockSide(isLeft ? "left" : "right");
+        resetDockTimer();
       }
     }
-  }, []);
+  }, [isDocked, wakeFromDock, resetDockTimer]);
 
   const scrollMascotChatToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const el = chatScrollRef.current;
@@ -1155,7 +1177,6 @@ export function MascotFloat() {
           -webkit-touch-callout: none;
           touch-action: none;
           will-change: transform;
-          transition: left 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), top 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
         }
         .mascot-flight-img {
           position: absolute;
@@ -2170,7 +2191,12 @@ export function MascotFloat() {
           <div
             ref={floatRef}
             className="mascot-float"
-            style={floatPos ? { left: floatPos.left, top: floatPos.top, right: "auto", bottom: "auto" } : undefined}
+            style={{
+              ...(floatPos ? { left: floatPos.left, top: floatPos.top, right: "auto", bottom: "auto" } : {}),
+              transform: isDocked ? (dockSide === "left" ? "translateX(-45%)" : "translateX(45%)") : "none",
+              opacity: isDocked ? 0.48 : 1,
+              transition: "left 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), top 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.3s ease",
+            }}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
