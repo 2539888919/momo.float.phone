@@ -5,14 +5,16 @@ import { ArrowRight } from "lucide-react";
 
 import { AccountGate } from "@/components/auth/account-gate";
 import { CloudBackupScheduler } from "@/components/cloud-backup-scheduler";
+import { RealityBridgeScheduler } from "@/components/reality-bridge-scheduler";
 import { MediaMaintenanceScheduler } from "@/components/media-maintenance-scheduler";
+import { ChatReasoningVisibilityController } from "./chat-reasoning-visibility-controller";
 import { DesktopShell } from "./desktop-shell";
+import { OfflinePushRevampAnnouncement } from "./offline-push-revamp-announcement";
 import { SplashAnimation } from "./splash-animation";
 import { MusicProvider } from "@/lib/music-context";
-import { hydrateKvDb } from "@/lib/kv-db";
+import { hydrateKvDb, isKvHydrated } from "@/lib/kv-db";
 import { getThemeAssetMap, readThemeProfile } from "@/lib/theme-storage";
 import { resolveActiveIconSkins, type ThemeProfile } from "@/lib/theme-types";
-import { applyShellZoom, isMobileShell } from "@/lib/mobile-shell";
 import { hasPendingMcpOAuthCallback } from "@/lib/tool-executor";
 import { shouldRequestPwaFullscreen } from "@/lib/pwa-display-mode";
 
@@ -229,6 +231,8 @@ export function MainApp() {
   const [preparedDesktopTheme, setPreparedDesktopTheme] = useState<PreparedDesktopTheme | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [splashDismissed, setSplashDismissed] = useState(false);
+  const [kvHydrateFailed, setKvHydrateFailed] = useState(false);
+  const [initAttempt, setInitAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -240,6 +244,13 @@ export function MainApp() {
     void (async () => {
       await hydrateKvDb();
       if (cancelled) return;
+      // 水合失败绝不放行：此时所有 KV 数据（设置/绑定/线下记录等）在内存里都是
+      // 空的，进入后任何一次保存都会拿空数据整包覆盖 IndexedDB 里的真实历史。
+      if (!isKvHydrated()) {
+        setKvHydrateFailed(true);
+        return;
+      }
+      setKvHydrateFailed(false);
 
       let nextPreparedTheme: PreparedDesktopTheme | null = null;
       try {
@@ -256,9 +267,8 @@ export function MainApp() {
       }
     })();
 
-    // 安卓全屏兜底。是否请求全屏在每次点击时读取（渠道默认 + 用户「显示系统状态栏」偏好），
-    // beta 渠道默认不强制（延续测试线行为），用户显式选沉浸后恢复强制；设置切换后无需重载。
-    const isMobile = isMobileShell();
+    // 安卓全屏兜底。是否请求全屏在每次点击时读取，设置切换后无需重载。
+    const isMobile = window.matchMedia("(max-width: 500px) and (hover: none) and (pointer: coarse)").matches;
     if (!isMobile) return () => {
       cancelled = true;
     };
@@ -274,22 +284,28 @@ export function MainApp() {
       cancelled = true;
       document.removeEventListener("click", tryFullscreen);
     };
-  }, []);
+  }, [initAttempt]);
 
-  // 大屏档整屏缩放：首帧由 layout.tsx 内联脚本算好，这里只负责旋转/分屏后重算。
-  // 只在宽度变化时重算——键盘弹出只改高度，打字过程中缩放不能跳。
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    applyShellZoom();
-    let lastWidth = window.innerWidth;
-    const onResize = () => {
-      if (window.innerWidth === lastWidth) return;
-      lastWidth = window.innerWidth;
-      applyShellZoom();
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
+  if (kvHydrateFailed) {
+    return (
+      <main className="app-root" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100dvh", padding: "0 28px", background: "#0c0c12", color: "#e8e8ef" }}>
+        <div style={{ maxWidth: 340, textAlign: "center" }}>
+          <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 12 }}>本机数据暂时读取失败</div>
+          <div style={{ fontSize: 13, lineHeight: 1.8, opacity: 0.75, marginBottom: 20 }}>
+            浏览器的本地数据库（IndexedDB）没能打开。数据本身还在，为了避免在读不到数据的状态下继续使用把历史记录覆盖掉，应用先暂停进入。
+            <br />可以先重试；仍然不行的话，试试关掉本站的其他标签页、重启浏览器，或确认没有开无痕/隐私模式。
+          </div>
+          <button
+            type="button"
+            onClick={() => { setKvHydrateFailed(false); setInitAttempt((n) => n + 1); }}
+            style={{ padding: "10px 32px", borderRadius: 20, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.08)", color: "#fff", fontSize: 14, cursor: "pointer" }}
+          >
+            重试
+          </button>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <AccountGate>
@@ -302,7 +318,10 @@ export function MainApp() {
               initialThemeProfile={preparedDesktopTheme?.profile}
               initialThemeAssets={preparedDesktopTheme?.assets}
             />
+            <ChatReasoningVisibilityController />
+            <OfflinePushRevampAnnouncement />
             <CloudBackupScheduler />
+            <RealityBridgeScheduler />
             <MediaMaintenanceScheduler />
           </MusicProvider>
         </main>
