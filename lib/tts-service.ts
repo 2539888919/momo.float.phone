@@ -32,15 +32,106 @@ export function resolveVoiceConfig(characterId: string, appId?: ContentAppId): V
  * 2. 过滤星号动作/旁白描写，如 *轻轻一笑*
  * 3. 过滤系统方括号指令，如 [内心:xxx], [动作:xxx], [表情:xxx]
  */
-export function sanitizeTextForTTS(rawText: string): string {
-    if (!rawText) return "";
-    return rawText
+export type TTSEmotionContext = {
+    cleanText: string;
+    emotion?: "happy" | "sad" | "angry" | "fearful" | "disgusted" | "surprised" | "calm" | "neutral";
+    speedMultiplier: number;
+    stability?: number;
+    style?: number;
+};
+
+/**
+ * 智能情绪与语速分析器：
+ * 1. 扫描标签（括号、星号、方括号）中蕴含的角色情绪和语速指令，转化为 TTS 的原生控制参数；
+ * 2. 彻底抹去所有描写括号、星号、标签文本，只保留干净台词，坚决不念标签！
+ */
+export function extractTTSEmotionAndCleanText(rawText: string): TTSEmotionContext {
+    if (!rawText) return { cleanText: "", speedMultiplier: 1.0 };
+
+    // 1. 抓取所有可能包含神态动作描写的片段
+    const bracketMatches = rawText.match(/[（(【〔〖\[][^）)〕〗\]]+[）)〕〗\]]|\*[^*]+\*|<[^>]+>/g) || [];
+    const metaStr = bracketMatches.join(" ").toLowerCase();
+
+    let emotion: TTSEmotionContext["emotion"] = undefined;
+    let speedMultiplier = 1.0;
+    let stability: number | undefined = undefined;
+    let style: number | undefined = undefined;
+
+    // 情绪与语调探测
+    if (/开心|高兴|兴奋|欢快|大笑|微笑|欣喜|激动|庆祝|happy|laugh|excited|joy/.test(metaStr)) {
+        emotion = "happy";
+        speedMultiplier = 1.08;
+        stability = 0.35;
+        style = 0.65;
+    } else if (/悲伤|难过|伤心|哭|哽咽|委屈|落泪|心疼|绝望|沮丧|sad|cry|weep|sorrow|tear/.test(metaStr)) {
+        emotion = "sad";
+        speedMultiplier = 0.88;
+        stability = 0.4;
+        style = 0.55;
+    } else if (/愤怒|生气|暴怒|发火|恼火|咬牙|咆哮|怒吼|angry|furious|rage|yell/.test(metaStr)) {
+        emotion = "angry";
+        speedMultiplier = 1.15;
+        stability = 0.28;
+        style = 0.75;
+    } else if (/温柔|轻柔|耳语|小声|呢喃|轻语|低语|微弱|害羞|脸红|whisper|soft|gentle|shy/.test(metaStr)) {
+        emotion = "calm";
+        speedMultiplier = 0.92;
+        stability = 0.58;
+        style = 0.45;
+    } else if (/害怕|惊恐|恐惧|颤抖|发抖|慌张|恐慌|fear|scared|terrified|shiver/.test(metaStr)) {
+        emotion = "fearful";
+        speedMultiplier = 1.1;
+        stability = 0.32;
+        style = 0.6;
+    } else if (/惊讶|吃惊|震惊|诧异|目瞪口呆|surprised|shocked|gasp/.test(metaStr)) {
+        emotion = "surprised";
+        speedMultiplier = 1.05;
+        stability = 0.38;
+        style = 0.5;
+    } else if (/冷漠|严肃|冷静|平淡|漠然|calm|cold|serious/.test(metaStr)) {
+        emotion = "calm";
+        speedMultiplier = 0.98;
+        stability = 0.75;
+        style = 0.15;
+    }
+
+    // 语速专项探测
+    if (/快点|急促|焦急|语速快|匆匆|fast|hurry|quick/.test(metaStr)) {
+        speedMultiplier = Math.min(1.4, speedMultiplier * 1.2);
+    } else if (/慢点|缓缓|语速慢|迟疑|拉长|slow|hesitant/.test(metaStr)) {
+        speedMultiplier = Math.max(0.7, speedMultiplier * 0.82);
+    }
+
+    // 2. 彻底清洗文本：不给 TTS 留任何念标签的借口
+    let clean = rawText
+        // 剥离大段思考块
         .replace(/<([a-zA-Z0-9_-]+)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
         .replace(/<[^>]+>/g, "")
-        .replace(/\*[^*]+\*/g, "")
-        .replace(/\[(?:内心|动作|表情|状态|好感度|转账|红包|图片|语音|位置|音乐|系统)[^\]]*\]/gi, "")
+        // 剥离中英文圆括号内的动作/心理描写
+        .replace(/[（(][^）)]*[）)]/g, "")
+        // 剥离方括号、黑括号内的指令与旁白
+        .replace(/[【〔〖\[][^】〕〗\]]*[】〕〗\]]/g, "")
+        // 剥离 Markdown 星号强调或星号动作
+        .replace(/\*{1,3}[^*]+\*{1,3}/g, "")
+        .replace(/\*/g, "")
+        // 剥离链接
+        .replace(/https?:\/\/\S+/gi, "")
+        // 剥离 Markdown 标题、引用符号
+        .replace(/^[#>\-\s]+/gm, "")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
+
+    return {
+        cleanText: clean,
+        emotion,
+        speedMultiplier,
+        stability,
+        style,
+    };
+}
+
+export function sanitizeTextForTTS(rawText: string): string {
+    return extractTTSEmotionAndCleanText(rawText).cleanText;
 }
 
 export async function synthesizeSpeech(
@@ -48,21 +139,21 @@ export async function synthesizeSpeech(
     voiceConfig: VoiceApiConfig,
     options?: { emotion?: string },
 ): Promise<Blob | null> {
-    const cleanText = sanitizeTextForTTS(text);
-    if (!cleanText) return null;
+    const ctx = extractTTSEmotionAndCleanText(text);
+    if (!ctx.cleanText) return null;
 
     const provider = voiceConfig.provider;
 
     if (provider === "Minimax") {
-        return synthesizeMinimax(cleanText, voiceConfig, options?.emotion);
+        return synthesizeMinimax(ctx.cleanText, voiceConfig, ctx.emotion || options?.emotion, ctx.speedMultiplier);
     }
 
     if (provider === "OpenAI") {
-        return synthesizeOpenAI(cleanText, voiceConfig);
+        return synthesizeOpenAI(ctx.cleanText, voiceConfig, ctx.speedMultiplier);
     }
 
     if (provider === "ElevenLabs") {
-        return synthesizeElevenLabs(cleanText, voiceConfig);
+        return synthesizeElevenLabs(ctx.cleanText, voiceConfig, ctx);
     }
 
     return null;
@@ -111,13 +202,15 @@ function normalizeMinimaxPitch(pitch: number | undefined): number {
     return Math.min(MINIMAX_PITCH_MAX, Math.max(MINIMAX_PITCH_MIN, Math.round(pitch)));
 }
 
-async function synthesizeMinimax(text: string, config: VoiceApiConfig, emotion?: string): Promise<Blob | null> {
+async function synthesizeMinimax(text: string, config: VoiceApiConfig, emotion?: string, speedMultiplier = 1.0): Promise<Blob | null> {
     if (!config.apiKey) throw new Error("Minimax API Key 未配置");
 
     const baseUrl = (config.baseUrl || "https://api.minimaxi.com/v1").replace(/\/$/, "");
+    const baseSpeed = normalizeMinimaxSpeed(config.speechSpeed);
+    const finalSpeed = Math.min(MINIMAX_SPEED_MAX, Math.max(MINIMAX_SPEED_MIN, baseSpeed * speedMultiplier));
     const voiceSetting: Record<string, unknown> = {
         voice_id: config.defaultVoice || "male-qn-qingse",
-        speed: normalizeMinimaxSpeed(config.speechSpeed),
+        speed: finalSpeed,
         vol: 1.0,
         pitch: normalizeMinimaxPitch(config.speechPitch),
     };
@@ -169,10 +262,12 @@ async function synthesizeMinimax(text: string, config: VoiceApiConfig, emotion?:
 
 // ── OpenAI TTS ──────────────────────────────────────
 
-async function synthesizeOpenAI(text: string, config: VoiceApiConfig): Promise<Blob | null> {
+async function synthesizeOpenAI(text: string, config: VoiceApiConfig, speedMultiplier = 1.0): Promise<Blob | null> {
     if (!config.apiKey) throw new Error("OpenAI API Key 未配置");
 
     const baseUrl = config.baseUrl || "https://api.openai.com/v1";
+    const baseSpeed = typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed) ? config.speechSpeed : 1.0;
+    const finalSpeed = Math.min(2.0, Math.max(0.25, baseSpeed * speedMultiplier));
     const response = await fetchWithTimeout(`${baseUrl.replace(/\/$/, "")}/audio/speech`, {
         method: "POST",
         headers: {
@@ -184,9 +279,7 @@ async function synthesizeOpenAI(text: string, config: VoiceApiConfig): Promise<B
             input: text,
             voice: config.defaultVoice || "alloy",
             response_format: "mp3",
-            ...(typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed)
-                ? { speed: Math.min(2, Math.max(0.5, config.speechSpeed)) }
-                : {}),
+            speed: finalSpeed,
         }),
     });
 
@@ -201,15 +294,29 @@ async function synthesizeOpenAI(text: string, config: VoiceApiConfig): Promise<B
 
 // ── ElevenLabs TTS ──────────────────────────────────
 
-async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promise<Blob | null> {
+async function synthesizeElevenLabs(text: string, config: VoiceApiConfig, ctx?: TTSEmotionContext): Promise<Blob | null> {
     if (!config.apiKey) throw new Error("ElevenLabs API Key 未配置");
 
     const baseUrl = (config.baseUrl || "https://api.elevenlabs.io/v1").replace(/\/$/, "");
     const voiceId = config.defaultVoice || "21m00Tcm4TlvDq8ikWAM";
-    const modelId = config.model || "eleven_turbo_v2_5";
+    const modelId = config.model || "eleven_v4";
 
     // 过滤可能夹带的非 ASCII 字符，避免请求头报错
     const safeApiKey = config.apiKey.trim().replace(/[^\x00-\x7F]/g, "");
+
+    const baseSpeed = typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed)
+        ? config.speechSpeed
+        : 1.0;
+    const finalSpeed = Math.min(2.0, Math.max(0.5, baseSpeed * (ctx?.speedMultiplier ?? 1.0)));
+
+    const voiceSettings: Record<string, unknown> = {
+        stability: ctx?.stability ?? 0.5,
+        similarity_boost: 0.75,
+        speed: finalSpeed,
+    };
+    if (typeof ctx?.style === "number") {
+        voiceSettings.style = ctx.style;
+    }
 
     const response = await fetchWithTimeout(`${baseUrl}/text-to-speech/${voiceId}`, {
         method: "POST",
@@ -220,27 +327,19 @@ async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promi
         body: JSON.stringify({
             text,
             model_id: modelId,
-            voice_settings: {
-                stability: 0.5,
-                similarity_boost: 0.75,
-                speed: typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed)
-                    ? Math.min(2.0, Math.max(0.5, config.speechSpeed))
-                    : 1.0,
-            },
+            voice_settings: voiceSettings,
         }),
     });
 
     const reqId = response.headers.get("request-id") || response.headers.get("x-trace-id") || "";
-
     if (!response.ok) {
         const errText = await response.text().catch(() => "");
         throw new Error(`ElevenLabs TTS 请求失败 (${response.status})${reqId ? ` [req_id: ${reqId}]` : ""}: ${errText}`);
     }
 
-    // 读取官方响应头：获取本次生成的字符消耗与排查追踪 ID
     const charCost = response.headers.get("character-cost");
     if (charCost) {
-        console.log(`[ElevenLabs TTS] 合成成功 (model: ${modelId})，本次消耗字符额度: ${charCost}，request-id: ${reqId}`);
+        console.log(`[ElevenLabs TTS] 合成成功 (model: ${modelId})，本次消耗字符: ${charCost}，情绪: ${ctx?.emotion || "自然"}`);
     }
 
     const blob = await response.blob();
